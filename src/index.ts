@@ -14,6 +14,12 @@ app.get('/', (req, res) => {
     res.send('Backend is running');
 });
 
+app.use((err: Error, req: express.Request, res: express.Response) => {
+    return res
+      .status(400)
+      .json({ error: { message: err.message || "something went wrong" } });
+  });
+
 
 
 app.listen(3000, () => {
