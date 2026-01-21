@@ -9,7 +9,13 @@ const getSeatPrefix = (seatTypeName: string): string => {
 };
 
 /**
- * Create event with seat types and generate individual seats
+ * Create event with seat types (Virtual Seats Approach)
+ * 
+ * VIRTUAL SEATS: Seats are NOT pre-generated
+ * - Available seats tracked via event_seat_types.available_quantity
+ * - Seats are created on-demand when booked
+ * - Temporary locks stored in seat_locks table during checkout
+ * - This approach scales to millions of events without millions of seat rows
  */
 export const createEvent = async (payload: any) => {
   try {
@@ -63,9 +69,11 @@ export const createEvent = async (payload: any) => {
         }
       );
 
-      // 2. Create seat types and generate seats
+      // 2. Create seat types (Virtual Seats - No pre-generation)
+      // Seats will be created on-demand when booked
+      // Available seats tracked via event_seat_types.available_quantity
       const createdSeatTypes = [];
-      let totalSeatsCreated = 0;
+      let totalSeatsAvailable = 0;
 
       for (let i = 0; i < seat_types.length; i++) {
         const seatType = seat_types[i];
@@ -75,7 +83,9 @@ export const createEvent = async (payload: any) => {
           throw new Error(`Seat type ${i + 1} is missing required fields: name, price, quantity`);
         }
 
-        // Create seat type
+        const seatQuantity = parseInt(quantity);
+
+        // Create seat type (seats will be virtual until booked)
         const createdSeatType = await t.one(
           `INSERT INTO event_seat_types(
             event_id, name, description, price, quantity, available_quantity, display_order
@@ -89,35 +99,13 @@ export const createEvent = async (payload: any) => {
             name: seatTypeName,
             description: seatTypeDesc || null,
             price: parseFloat(price),
-            quantity: parseInt(quantity),
-            available_quantity: parseInt(quantity), // Initially all available
+            quantity: seatQuantity,
+            available_quantity: seatQuantity, // Initially all available (virtual seats)
             display_order: i + 1,
           }
         );
 
-        // 3. Generate individual seats using PostgreSQL generate_series (server-side, optimized)
-        // This is much faster than client-side loops - PostgreSQL handles it efficiently
-        const seatPrefix = getSeatPrefix(seatTypeName);
-        const seatQuantity = parseInt(quantity);
-
-        // Single SQL query generates all seats server-side: P1, P2, P3... P50
-        // Uses generate_series() for optimal performance (handles 1000+ seats efficiently)
-        await t.none(
-          `INSERT INTO seats(event_id, event_seat_type_id, seat_label, status)
-           SELECT 
-             $(event_id)::INTEGER,
-             $(event_seat_type_id)::INTEGER,
-             $(prefix) || generate_series(1, $(quantity))::TEXT,
-             'available'::VARCHAR(50)`,
-          {
-            event_id: event.id,
-            event_seat_type_id: createdSeatType.id,
-            prefix: seatPrefix,
-            quantity: seatQuantity,
-          }
-        );
-
-        totalSeatsCreated += seatQuantity;
+        totalSeatsAvailable += seatQuantity;
 
         createdSeatTypes.push({
           id: createdSeatType.id,
@@ -147,8 +135,8 @@ export const createEvent = async (payload: any) => {
           created_at: event.created_at,
         },
         seat_types: createdSeatTypes,
-        total_seats_created: totalSeatsCreated,
-        message: "Event created successfully with seat types and individual seats",
+        total_seats_available: totalSeatsAvailable,
+        message: `Event created successfully with ${totalSeatsAvailable} virtual seats. Seats will be generated on-demand when booked.`,
       };
     });
   } catch (err: any) {
