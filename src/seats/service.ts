@@ -84,12 +84,7 @@ export const createSeatType = async (
       message: "Seat type created successfully",
     };
 
-    // Broadcast to all connected clients
-    emitToAll('seat_type_created', {
-      event_id: eventId,
-      seat_type: result.seat_type
-    });
-
+    // Don't broadcast here - let the caller (socket handler or HTTP controller) handle it
     return result;
   } catch (err: any) {
     throw err;
@@ -211,12 +206,7 @@ export const updateSeatType = async (
       message: "Seat type updated successfully",
     };
 
-    // Broadcast to all connected clients
-    emitToAll('seat_type_updated', {
-      event_id: eventId,
-      seat_type: result.seat_type
-    });
-
+    // Don't broadcast here - let the caller (socket handler or HTTP controller) handle it
     return result;
   } catch (err: any) {
     throw err;
@@ -280,13 +270,7 @@ export const deleteSeatType = async (
       deleted_seat_type_id: seatTypeId,
     };
 
-    // Broadcast to all connected clients
-    emitToAll('seat_type_deleted', {
-      event_id: eventId,
-      seat_type_id: seatTypeId,
-      seat_type_name: existingSeatType.name
-    });
-
+    // Don't broadcast here - let the caller (socket handler or HTTP controller) handle it
     return result;
   } catch (err: any) {
     throw err;
@@ -413,16 +397,7 @@ export const lockSeat = async (
         expires_in_seconds: 600,
       };
 
-      // Broadcast to all connected clients (including organizer)
-      emitToAll('seat_locked', {
-        event_id: eventId,
-        seat_type_id: seatTypeId,
-        seat_label: trimmedLabel,
-        user_id: userId,
-        available_quantity: updated.available_quantity,
-        lock: result.lock
-      });
-
+      // Don't broadcast here - let the caller (socket handler or HTTP controller) handle it
       return result;
     });
   } catch (err: any) {

@@ -74,13 +74,14 @@ export const initializeSocket = (httpServer: HttpServer) => {
           userId
         );
 
-        // Broadcast to all clients
-        emitToAll('seat_type_created', {
+        // Broadcast to all clients EXCEPT requester
+        socket.broadcast.emit('seat_type_created', {
           event_id: data.eventId,
           seat_type: result.seat_type
         });
+        console.log(`[BROADCAST] seat_type_created to all clients except ${socket.id}`);
 
-        // Send response to requester
+        // Send response only to requester
         socket.emit('create_seat_type_response', { success: true, data: result });
       } catch (error: any) {
         socket.emit('create_seat_type_response', { success: false, error: error.message });
@@ -107,13 +108,14 @@ export const initializeSocket = (httpServer: HttpServer) => {
           userId
         );
 
-        // Broadcast to all clients
-        emitToAll('seat_type_updated', {
+        // Broadcast to all clients EXCEPT requester
+        socket.broadcast.emit('seat_type_updated', {
           event_id: data.eventId,
           seat_type: result.seat_type
         });
+        console.log(`[BROADCAST] seat_type_updated to all clients except ${socket.id}`);
 
-        // Send response to requester
+        // Send response only to requester
         socket.emit('update_seat_type_response', { success: true, data: result });
       } catch (error: any) {
         socket.emit('update_seat_type_response', { success: false, error: error.message });
@@ -134,14 +136,15 @@ export const initializeSocket = (httpServer: HttpServer) => {
           userId
         );
 
-        // Broadcast to all clients
-        emitToAll('seat_type_deleted', {
+        // Broadcast to all clients EXCEPT requester
+        socket.broadcast.emit('seat_type_deleted', {
           event_id: data.eventId,
           seat_type_id: data.seatTypeId,
           seat_type_name: result.message
         });
+        console.log(`[BROADCAST] seat_type_deleted to all clients except ${socket.id}`);
 
-        // Send response to requester
+        // Send response only to requester
         socket.emit('delete_seat_type_response', { success: true, data: result });
       } catch (error: any) {
         socket.emit('delete_seat_type_response', { success: false, error: error.message });
@@ -171,8 +174,8 @@ export const initializeSocket = (httpServer: HttpServer) => {
 
         const availableQuantity = seatType ? parseInt(seatType.available_quantity) : 0;
 
-        // Broadcast to all clients
-        emitToAll('seat_locked', {
+        // Broadcast to all clients EXCEPT requester
+        socket.broadcast.emit('seat_locked', {
           event_id: data.eventId,
           seat_type_id: data.seatTypeId,
           seat_label: result.lock.seat_label,
@@ -180,9 +183,14 @@ export const initializeSocket = (httpServer: HttpServer) => {
           available_quantity: availableQuantity,
           lock: result.lock
         });
+        console.log(`[BROADCAST] seat_locked to all clients except ${socket.id}`, {
+          event_id: data.eventId,
+          seat_label: result.lock.seat_label
+        });
 
-        // Send response to requester
+        // Send response only to requester
         socket.emit('lock_seat_response', { success: true, data: result });
+        console.log(`[RESPONSE] lock_seat_response sent to requester ${socket.id}`);
       } catch (error: any) {
         socket.emit('lock_seat_response', { success: false, error: error.message });
       }

@@ -3,7 +3,7 @@ import db from "../db";
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || "your-refresh-secret-key";
-const ACCESS_TOKEN_EXPIRY = "15m"; // 15 minutes
+const ACCESS_TOKEN_EXPIRY = "30m"; // 30 minutes
 const REFRESH_TOKEN_EXPIRY = "7d"; // 7 days
 
 export interface TokenPayload {
