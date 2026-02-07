@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 
 import * as service from "./service";
+import { emitToAll } from "../lib/socket";
 
 export const createEvent = async (
   req: Request,
@@ -22,6 +23,14 @@ export const createEvent = async (
     };
 
     const data = await service.createEvent(eventData);
+    
+    // Broadcast to all clients (HTTP route - no requester to exclude)
+    emitToAll('event_created', {
+      event: data.event,
+      seat_types: data.seat_types,
+      total_seats_available: data.total_seats_available,
+    });
+    
     return res.json({ data });
   } catch (err: any) {
     next(err);
@@ -100,6 +109,12 @@ export const updateEvent = async (
     }
 
     const data = await service.updateEvent(eventId, req.body, userId);
+    
+    // Broadcast to all clients (HTTP route - no requester to exclude)
+    emitToAll('event_updated', {
+      event: data.event,
+    });
+    
     return res.json({ data });
   } catch (err: any) {
     next(err);
@@ -125,6 +140,13 @@ export const deleteEvent = async (
     }
 
     const data = await service.deleteEvent(eventId, userId);
+    
+    // Broadcast to all clients (HTTP route - no requester to exclude)
+    emitToAll('event_deleted', {
+      deleted_event_id: data.deleted_event_id,
+      message: data.message,
+    });
+    
     return res.json({ data });
   } catch (err: any) {
     next(err);

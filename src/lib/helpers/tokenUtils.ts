@@ -1,5 +1,9 @@
 import jwt from "jsonwebtoken";
 import db from "../db";
+import {
+  isTokenBlacklisted as checkTokenBlacklist,
+  blacklistToken as addTokenToBlacklist,
+} from "../cache/tokenCache";
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || "your-refresh-secret-key";
@@ -9,6 +13,8 @@ const REFRESH_TOKEN_EXPIRY = "7d"; // 7 days
 export interface TokenPayload {
   userId: number;
   type: "access" | "refresh";
+  iat?: number;
+  exp?: number;
 }
 
 /**
@@ -31,14 +37,26 @@ export const generateTokens = (userId: number) => {
 };
 
 /**
- * Check if a token is blacklisted
+ * Check if a token is blacklisted (uses Redis cache for O(1) lookup)
+ * Falls back to database if Redis is unavailable
  */
 export const isTokenBlacklisted = async (token: string): Promise<boolean> => {
-  const blacklisted = await db.oneOrNone(
-    `SELECT id FROM blacklisted_tokens WHERE token = $(token) AND expires_at > NOW()`,
-    { token }
-  );
-  return !!blacklisted;
+  return await checkTokenBlacklist(token);
+};
+
+/**
+ * Blacklist a token (adds to Redis + Database for redundancy)
+ * 
+ * @param token - JWT token to blacklist
+ * @param userId - User ID who owns the token
+ * @param expiresAt - Token expiry date
+ */
+export const blacklistToken = async (
+  token: string,
+  userId: number,
+  expiresAt: Date
+): Promise<void> => {
+  await addTokenToBlacklist(token, userId, expiresAt);
 };
 
 /**

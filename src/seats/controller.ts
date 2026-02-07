@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from "express";
 import * as service from "./service";
 import { emitToAll } from "../lib/socket";
-import db from "../lib/db";
+import { getCachedSeatAvailability, invalidateSeatAvailability, invalidateEventAvailability } from "../lib/cache";
+import { invalidateEventCache } from "../lib/cache/eventCache";
 
 export const lockSeat = async (
   req: Request,
@@ -33,13 +34,8 @@ export const lockSeat = async (
 
     const data = await service.lockSeat(eventId, seatTypeId, userId, seat_label);
     
-    // Get updated available quantity for broadcast
-    const seatType = await db.oneOrNone(
-      `SELECT available_quantity FROM event_seat_types WHERE id = $1`,
-      [seatTypeId]
-    );
-    
-    const availableQuantity = seatType ? parseInt(seatType.available_quantity) : 0;
+    // ⚡ Get updated available quantity from Redis cache (fast path)
+    const availableQuantity = await getCachedSeatAvailability(eventId, seatTypeId) ?? 0;
     
     // Broadcast to all clients (HTTP route - no requester to exclude)
     emitToAll('seat_locked', {
@@ -77,6 +73,10 @@ export const createSeatType = async (
 
     const data = await service.createSeatType(eventId, req.body, userId);
     
+    // ⚡ Invalidate seat availability & event cache (new seat type added)
+    await invalidateEventAvailability(eventId);
+    await invalidateEventCache(eventId);
+
     // Broadcast to all clients (HTTP route - no requester to exclude)
     emitToAll('seat_type_created', {
       event_id: eventId,
@@ -114,6 +114,10 @@ export const updateSeatType = async (
 
     const data = await service.updateSeatType(eventId, seatTypeId, req.body, userId);
     
+    // ⚡ Invalidate caches (seat type data changed)
+    await invalidateSeatAvailability(eventId, seatTypeId);
+    await invalidateEventCache(eventId);
+
     // Broadcast to all clients (HTTP route - no requester to exclude)
     emitToAll('seat_type_updated', {
       event_id: eventId,
@@ -151,6 +155,11 @@ export const deleteSeatType = async (
 
     const data = await service.deleteSeatType(eventId, seatTypeId, userId);
     
+    // ⚡ Invalidate caches (seat type deleted)
+    await invalidateSeatAvailability(eventId, seatTypeId);
+    await invalidateEventAvailability(eventId);
+    await invalidateEventCache(eventId);
+
     // Broadcast to all clients (HTTP route - no requester to exclude)
     emitToAll('seat_type_deleted', {
       event_id: eventId,

@@ -3,7 +3,10 @@ import { Server as SocketServer, Socket } from 'socket.io';
 import { verifyToken } from './helpers/tokenUtils';
 import { isTokenBlacklisted } from './helpers/tokenUtils';
 import * as seatService from '../seats/service';
-import db from '../lib/db';
+import * as eventService from '../events/service';
+import * as bookingService from '../bookings/service';
+import { getCachedSeatAvailability, invalidateEventAvailability, invalidateSeatAvailability } from './cache';
+import { invalidateEventCache } from './cache/eventCache';
 
 let io: SocketServer | null = null;
 
@@ -52,6 +55,120 @@ export const initializeSocket = (httpServer: HttpServer) => {
     console.log(`Client connected: ${socket.id}${userId ? ` (User: ${userId})` : ' (Unauthenticated)'}`);
 
     // ====================================
+    // EVENT OPERATIONS (WebSocket)
+    // ====================================
+
+    // Create event
+    socket.on('create_event', async (data: {
+      name: string;
+      description: string;
+      start_date: string;
+      end_date: string;
+      image_url?: string;
+      location: string;
+      venue_name?: string;
+      max_tickets_per_user?: number;
+      seat_types: Array<{
+        name: string;
+        description?: string;
+        price: number;
+        quantity: number;
+      }>;
+    }) => {
+      try {
+        if (!userId) {
+          socket.emit('error', { message: 'Authentication required' });
+          return;
+        }
+
+        const eventData = {
+          ...data,
+          organizer_id: userId,
+        };
+
+        const result = await eventService.createEvent(eventData);
+
+        // ⚡ Event list cache already invalidated inside createEvent service
+
+        // Broadcast to all clients EXCEPT requester (organizer)
+        socket.broadcast.emit('event_created', {
+          event: result.event,
+          seat_types: result.seat_types,
+          total_seats_available: result.total_seats_available,
+        });
+        console.log(`[BROADCAST] event_created to all clients except ${socket.id}`);
+
+        // Send response only to requester (organizer)
+        socket.emit('create_event_response', { success: true, data: result });
+      } catch (error: any) {
+        socket.emit('create_event_response', { success: false, error: error.message });
+      }
+    });
+
+    // Update event
+    socket.on('update_event', async (data: {
+      eventId: number;
+      name?: string;
+      description?: string;
+      start_date?: string;
+      end_date?: string;
+      image_url?: string;
+      location?: string;
+      venue_name?: string;
+      status?: string;
+      is_public?: boolean;
+      max_tickets_per_user?: number;
+    }) => {
+      try {
+        if (!userId) {
+          socket.emit('error', { message: 'Authentication required' });
+          return;
+        }
+
+        const result = await eventService.updateEvent(data.eventId, data, userId);
+
+        // ⚡ Event cache already invalidated inside updateEvent service
+
+        // Broadcast to all clients EXCEPT requester (organizer)
+        socket.broadcast.emit('event_updated', {
+          event: result.event,
+        });
+        console.log(`[BROADCAST] event_updated to all clients except ${socket.id}`);
+
+        // Send response only to requester (organizer)
+        socket.emit('update_event_response', { success: true, data: result });
+      } catch (error: any) {
+        socket.emit('update_event_response', { success: false, error: error.message });
+      }
+    });
+
+    // Delete event
+    socket.on('delete_event', async (data: { eventId: number }) => {
+      try {
+        if (!userId) {
+          socket.emit('error', { message: 'Authentication required' });
+          return;
+        }
+
+        const result = await eventService.deleteEvent(data.eventId, userId);
+
+        // ⚡ Event cache already invalidated inside deleteEvent service
+
+        // Broadcast to all clients EXCEPT requester (organizer)
+        socket.broadcast.emit('event_deleted', {
+          deleted_event_id: result.deleted_event_id,
+          message: result.message,
+        });
+        console.log(`[BROADCAST] event_deleted to all clients except ${socket.id}`);
+
+        // Send response only to requester (organizer)
+        socket.emit('delete_event_response', { success: true, data: result });
+      } catch (error: any) {
+        socket.emit('delete_event_response', { success: false, error: error.message });
+      }
+    });
+
+    // ====================================
     // SEAT TYPE OPERATIONS (WebSocket)
     // ====================================
 
@@ -73,6 +190,10 @@ export const initializeSocket = (httpServer: HttpServer) => {
           },
           userId
         );
+
+        // ⚡ Invalidate caches (new seat type changes availability)
+        await invalidateEventAvailability(data.eventId);
+        await invalidateEventCache(data.eventId);
 
         // Broadcast to all clients EXCEPT requester
         socket.broadcast.emit('seat_type_created', {
@@ -108,6 +229,10 @@ export const initializeSocket = (httpServer: HttpServer) => {
           userId
         );
 
+        // ⚡ Invalidate caches (seat type updated, availability may change)
+        await invalidateSeatAvailability(data.eventId, data.seatTypeId);
+        await invalidateEventCache(data.eventId);
+
         // Broadcast to all clients EXCEPT requester
         socket.broadcast.emit('seat_type_updated', {
           event_id: data.eventId,
@@ -135,6 +260,11 @@ export const initializeSocket = (httpServer: HttpServer) => {
           data.seatTypeId,
           userId
         );
+
+        // ⚡ Invalidate caches (seat type deleted)
+        await invalidateSeatAvailability(data.eventId, data.seatTypeId);
+        await invalidateEventAvailability(data.eventId);
+        await invalidateEventCache(data.eventId);
 
         // Broadcast to all clients EXCEPT requester
         socket.broadcast.emit('seat_type_deleted', {
@@ -166,13 +296,8 @@ export const initializeSocket = (httpServer: HttpServer) => {
           data.seat_label
         );
 
-        // Get updated available quantity from database
-        const seatType = await db.oneOrNone(
-          `SELECT available_quantity FROM event_seat_types WHERE id = $1`,
-          [data.seatTypeId]
-        );
-
-        const availableQuantity = seatType ? parseInt(seatType.available_quantity) : 0;
+        // ⚡ Get updated available quantity from Redis cache (fast path)
+        const availableQuantity = await getCachedSeatAvailability(data.eventId, data.seatTypeId) ?? 0;
 
         // Broadcast to all clients EXCEPT requester
         socket.broadcast.emit('seat_locked', {
@@ -193,6 +318,111 @@ export const initializeSocket = (httpServer: HttpServer) => {
         console.log(`[RESPONSE] lock_seat_response sent to requester ${socket.id}`);
       } catch (error: any) {
         socket.emit('lock_seat_response', { success: false, error: error.message });
+      }
+    });
+
+    // ====================================
+    // BOOKING OPERATIONS (WebSocket)
+    // ====================================
+
+    // Create booking
+    socket.on('create_booking', async (data: {
+      event_id: number;
+      seat_details: Array<{
+        seat_label: string;
+        seat_type_id: number;
+      }>;
+    }) => {
+      try {
+        if (!userId) {
+          socket.emit('error', { message: 'Authentication required' });
+          return;
+        }
+
+        const result = await bookingService.createBooking(
+          data.event_id,
+          userId,
+          data.seat_details
+        );
+
+        // Broadcast to all clients EXCEPT requester
+        socket.broadcast.emit('booking_created', {
+          event_id: result.booking.event_id,
+          booking_reference: result.booking.booking_reference,
+          total_amount: result.booking.total_amount,
+          status: result.booking.status,
+        });
+        console.log(`[BROADCAST] booking_created to all clients except ${socket.id}`);
+
+        // Send response only to requester
+        socket.emit('create_booking_response', { success: true, data: result });
+      } catch (error: any) {
+        socket.emit('create_booking_response', { success: false, error: error.message });
+      }
+    });
+
+    // Confirm booking (after payment)
+    socket.on('confirm_booking', async (data: {
+      booking_id: number;
+      payment_id: string;
+      payment_gateway?: string;
+    }) => {
+      try {
+        if (!userId) {
+          socket.emit('error', { message: 'Authentication required' });
+          return;
+        }
+
+        const result = await bookingService.confirmBooking(
+          data.booking_id,
+          data.payment_id,
+          data.payment_gateway || 'razorpay'
+        );
+
+        // Broadcast to all clients EXCEPT requester
+        socket.broadcast.emit('booking_confirmed', {
+          event_id: result.booking.event_id,
+          booking_reference: result.booking.booking_reference,
+          total_tickets: result.total_tickets,
+          status: result.booking.status,
+        });
+        console.log(`[BROADCAST] booking_confirmed to all clients except ${socket.id}`);
+
+        // Send response only to requester
+        socket.emit('confirm_booking_response', { success: true, data: result });
+      } catch (error: any) {
+        socket.emit('confirm_booking_response', { success: false, error: error.message });
+      }
+    });
+
+    // Cancel booking
+    socket.on('cancel_booking', async (data: {
+      booking_id: number;
+      reason?: string;
+    }) => {
+      try {
+        if (!userId) {
+          socket.emit('error', { message: 'Authentication required' });
+          return;
+        }
+
+        const result = await bookingService.cancelBooking(
+          data.booking_id,
+          userId,
+          data.reason
+        );
+
+        // Broadcast to all clients EXCEPT requester
+        socket.broadcast.emit('booking_cancelled', {
+          booking_id: data.booking_id,
+          reason: data.reason || 'Cancelled by user',
+        });
+        console.log(`[BROADCAST] booking_cancelled to all clients except ${socket.id}`);
+
+        // Send response only to requester
+        socket.emit('cancel_booking_response', { success: true, data: result });
+      } catch (error: any) {
+        socket.emit('cancel_booking_response', { success: false, error: error.message });
       }
     });
 
